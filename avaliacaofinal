@@ -1,0 +1,165 @@
+import os
+import uuid
+import requests
+from flask import Flask, render_template, request, redirect, url_for, flash
+from PIL import Image, ImageFilter, ImageOps
+import cv2
+import numpy as np
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)) #arquivo do projeto
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'static', 'uploads') #salva as imagens dentro do projeto, na pasta uploads que vai criar dentro de static
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+app = Flask(__name__)
+app.secret_key = "armando"
+
+# ================= Classe Imagem =================
+class Imagem:
+    def __init__(self, caminho):
+        if not os.path.exists(caminho):
+            raise FileNotFoundError("Arquivo de imagem não encontrado.")
+        self.caminho = caminho
+        self.imagem = Image.open(caminho)
+
+    def get_imagem(self):
+        return self.imagem
+
+    def salvar(self, nova_imagem, sufixo):
+        nome_base = os.path.basename(self.caminho)
+        nome, ext = os.path.splitext(nome_base)
+        novo_nome = f"{uuid.uuid4()}_{nome}_{sufixo}{ext}" #cria um identificador universal 
+        caminho_salvar = os.path.join(UPLOAD_FOLDER, novo_nome) #adc na pasta
+        nova_imagem.save(caminho_salvar)
+        return caminho_salvar
+
+# ================= Classe Download =================
+class Download:
+    @staticmethod
+    def baixar_imagem(url):
+        try:
+            response = requests.get(url)
+            if response.status_code == 200:
+                nome_arquivo = f"{uuid.uuid4()}.jpg" 
+                caminho = os.path.join(UPLOAD_FOLDER, nome_arquivo)
+                with open(caminho, 'wb') as f:
+                    f.write(response.content)
+                return caminho
+            else:
+                raise Exception("Erro ao baixar a imagem.")
+        except Exception as e:
+            raise Exception(f"Erro ao baixar imagem: {e}")
+
+# ================= Classes de Filtro =================
+class FiltroBase:
+    def aplicar(self, imagem_pil):
+        raise NotImplementedError
+
+class FiltroEscalaCinza(FiltroBase):
+    def aplicar(self, imagem_pil):
+        return imagem_pil.convert('L')
+
+class FiltroPretoBranco(FiltroBase):
+    def aplicar(self, imagem_pil):
+        img = imagem_pil.convert('L')
+        return img.point(lambda x: 0 if x < 128 else 255, '1')
+
+class FiltroNegativo(FiltroBase):
+    def aplicar(self, imagem_pil):
+        return ImageOps.invert(imagem_pil.convert('RGB'))
+
+class FiltroContorno(FiltroBase):
+    def aplicar(self, imagem_pil):
+        return imagem_pil.filter(ImageFilter.CONTOUR)
+
+class FiltroBlur(FiltroBase):
+    def aplicar(self, imagem_pil):
+        return imagem_pil.filter(ImageFilter.GaussianBlur(5))
+
+class FiltroCartoon(FiltroBase):
+    def aplicar(self, imagem_pil):
+        img_cv = cv2.cvtColor(np.array(imagem_pil), cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        gray = cv2.medianBlur(gray, 5)
+        edges = cv2.adaptiveThreshold(gray, 255,
+                                      cv2.ADAPTIVE_THRESH_MEAN_C,
+                                      cv2.THRESH_BINARY, 9, 9)
+        color = cv2.bilateralFilter(img_cv, 9, 300, 300)
+        cartoon = cv2.bitwise_and(color, color, mask=edges)
+        cartoon_rgb = cv2.cvtColor(cartoon, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(cartoon_rgb) 
+
+#até aqui é o trabalho original
+
+#a partir disso é o web
+# ================= Classe principal do App =================
+class ProgramaImagemWeb:
+    def __init__(self):
+        self.imagem_obj = None
+        self.filtros = { #define o dicionario com os filtros (usei no HTML pra fazer o seletor do filtro)
+            "1": ("Escala de Cinza", FiltroEscalaCinza()),
+            "2": ("Preto e Branco", FiltroPretoBranco()),
+            "3": ("Negativo", FiltroNegativo()),
+            "4": ("Contorno", FiltroContorno()),
+            "5": ("Desfoque (Blur)", FiltroBlur()),
+            "6": ("Cartoon", FiltroCartoon()),
+        }
+
+    def carregar_imagem(self, caminho_ou_url):
+        if caminho_ou_url.startswith("http"): #verifica se é caminho ou url pra baixar 
+            caminho = Download.baixar_imagem(caminho_ou_url)
+        else:
+            caminho = caminho_ou_url #se for so caminho so envia a imagem
+
+        self.imagem_obj = Imagem(caminho)
+
+    def aplicar_filtro(self, codigo_filtro):
+        if not self.imagem_obj: #verifica se a img foi carregada
+            raise Exception("Nenhuma imagem carregada.")
+        
+        if codigo_filtro not in self.filtros: 
+            raise Exception("Filtro inválido.")
+        
+        filtro = self.filtros[codigo_filtro][1] #escolhe o filtro no dicionario
+        imagem_filtrada = filtro.aplicar(self.imagem_obj.get_imagem()) #aplica o filtro 
+        caminho_salvo = self.imagem_obj.salvar(imagem_filtrada, self.filtros[codigo_filtro][0].replace(" ", "_").lower()) #salva a imagem com o sufixo sendo o nome do filtro
+        
+        return caminho_salvo
+
+programa = ProgramaImagemWeb()
+
+# ================= Flask routes =================
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    imagem_original_url = None #cria os campos pra guardar a imagem og e a modificada
+    imagem_filtrada_url = None
+
+    if request.method == 'POST': #verifica se quer adicionar
+        arquivo = request.files.get('arquivo') #recebe o arquivo do HTML
+        url_imagem = request.form.get('url_imagem') #recebe o url do HTML
+        filtro_selecionado = request.form.get('filtro') #recebe o filtro do HTML
+
+        try:
+            if arquivo and arquivo.filename != '': #verifica se o campo arquivo ta preenchido
+                nome_arquivo = f"{uuid.uuid4()}_{arquivo.filename}" 
+                caminho_arquivo = os.path.join(UPLOAD_FOLDER, nome_arquivo) #se sim, adiciona ele na pasta
+                arquivo.save(caminho_arquivo)
+                programa.carregar_imagem(caminho_arquivo)
+            elif url_imagem: #se nao for arquivo, ve se preencheu o url
+                programa.carregar_imagem(url_imagem) 
+            else: #se nenhuma das opçoes for verdadeira, aciona a excecao
+                flash("Nenhuma imagem foi enviada.")
+                return redirect(url_for('index'))
+
+            caminho_filtrado = programa.aplicar_filtro(filtro_selecionado) #coloca o filtro na imagem
+
+            imagem_original_url = os.path.relpath(programa.imagem_obj.caminho, BASE_DIR).replace('\\', '/').replace('static/', '') #atualiza os campos com as imagens e coloca nas pastas
+            imagem_filtrada_url = os.path.relpath(caminho_filtrado, BASE_DIR).replace('\\', '/').replace('static/', '')
+
+        except Exception as e:
+            flash(str(e))
+            return redirect(url_for('index'))
+
+    return render_template('index.html', filtros=programa.filtros, imagem_original=imagem_original_url, imagem_filtrada=imagem_filtrada_url) #envia os campos que vao ser usados no HTML
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5050)
