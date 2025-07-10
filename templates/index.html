@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Editor de Imagens </title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+
+    <div class="header-banner">
+        <h1>Editor de Imagens</h1>
+    </div>
+
+    <div class="retangulo-menor-upload">
+        <p>Upload de imagem:</p>
+    </div>
+
+    <div class="retangulo-menor-filtro">
+        <p>Escolha o filtro:</p>
+    </div>
+
+
+    <form method="POST" enctype="multipart/form-data">
+
+        <div class="input-arquivo">
+            <input type="file" name="arquivo" accept="image/*">
+        </div>
+
+        <div class="input-url">
+            <label>Ou URL da imagem:</label>
+            <input type="url" name="url_imagem" placeholder="http://exemplo.com/imagem.jpg"><br>
+        </div>
+
+        <div class="botoes-filtro">
+            {% for codigo, (nome, _) in filtros.items() %}
+            <button type="submit" name="filtro" value="{{ codigo }}">{{ nome }}</button>
+            {% endfor %}
+        </div>
+
+    </form>
+
+    {% with messages = get_flashed_messages() %}
+    {% if messages %}
+    <div class="retangulo-erro">
+        {% for msg in messages %}
+        <p>{{ msg }}</p>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <div class="imagem-original">
+        {% if imagem_original %}
+        <h2>Imagem Original:</h2>
+        <img src="{{ url_for('static', filename=imagem_original) }}" style="max-width:300px;">
+    </div>
+    {% endif %}
+
+    <div class="imagem-filtrada">
+        {% if imagem_filtrada %}
+        <h2>Imagem Filtrada:</h2>
+        <img src="{{ url_for('static', filename=imagem_filtrada) }}" style="max-width:300px;">
+        <p><a href="{{ url_for('static', filename=imagem_filtrada) }}" download>Download da imagem filtrada</a></p>
+    </div>
+    {% endif %}
+
+</body>
+
+</html>
